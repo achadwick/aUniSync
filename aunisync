@@ -16,7 +16,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+
 ## Imports
+
 
 import os
 import sys
@@ -35,7 +37,9 @@ from gi.repository import GLib
 from gi.repository import GObject
 from gi.repository import Gio
 
+
 ## Constants
+
 
 #: Program name for the about box.
 PROGRAM_NAME = 'aUniSync'
@@ -62,6 +66,7 @@ def normalize_path(root):
 
 
 ## Class definitions
+
 
 class ProfileState:
     """Profile state codes."""
@@ -175,6 +180,7 @@ class StatusIcon (Gtk.StatusIcon):
                          button=button, activate_time=activate_time)
 
 
+
 class RecursiveDirMonitor (object):
     """Monitor directories via GIO (typically inotify on Linux)."""
 
@@ -184,10 +190,10 @@ class RecursiveDirMonitor (object):
     _MONITOR_FLAGS = Gio.FileMonitorFlags.NONE
 
 
-    def __init__(self, app):
-        """Construct, ready to report back to the app."""
+    def __init__(self, profile):
+        """Construct, ready to report back to its profile."""
         super(RecursiveDirMonitor, self).__init__()
-        self._app = app
+        self._profile = weakref.proxy(profile)
         self._monitors_by_uri = {}
     
 
@@ -267,7 +273,7 @@ class RecursiveDirMonitor (object):
             logging.debug("Not reporting change to %r: was removed" % (root,))
             return
         logging.debug("Changes detected in %r (%s)" % (root, event))
-        self._app.monitored_path_changed(root)
+        self._profile.monitored_path_changed(root)
         if event == Gio.FileMonitorEvent.CREATED:
             file1_type = file1.query_file_type(self._QUERY_FLAGS, None)
             if file1_type == Gio.FileType.DIRECTORY:
@@ -305,11 +311,14 @@ class RecursiveDirMonitor (object):
             self._delete_monitor(root_mon)
 
 
+
 class Profile (object):
     """Unison profile and state."""
 
     PROFILE_DIR = ".unison"
     PROFILE_SUFFIX = ".prf"
+    SETTLE_INTERVAL = 5
+
 
     ## Construction
 
@@ -354,6 +363,8 @@ class Profile (object):
         # Cached values
         self.__monitored_paths = set()
         self.__mountpoint_paths = set()
+        # Filesystem monitoring
+        self._monitor = RecursiveDirMonitor(self)
         # State and synchronization management
         self._state = ProfileState.UNKNOWN
         self.timeout = None
@@ -416,7 +427,6 @@ class Profile (object):
                 self._mountpoints.add(value)
             elif key == "label":
                 self._label = unicode(value)
-
 
 
     ## Public read-only properties
@@ -496,6 +506,75 @@ class Profile (object):
             self._app.state_changed()
 
 
+    ## Filesystem monitoring
+    # It's a little inefficient to have one RecursiveDirMonitor per profile
+    # instead of one big one in the app itself, but it avoids having to
+    # maintain refcounts when profiles overlap. Locally overlapping profiles
+    # should be possible (and scheduled one at a time via a queue)
+
+
+    def start_monitoring(self):
+        """Starts filesystem monitoring for this profile"""
+        for path in self.monitored_paths:
+            self._monitor.add_path(path)
+
+
+    def stop_monitoring(self):
+        """Stops filesystem monitoring for this profile"""
+        for path in self.monitored_paths:
+            self._monitor.remove_path(path)
+
+
+    def monitored_path_changed(self, path):
+        """Starts the profile settle timer."""
+        self.restart_settle_timeout()
+
+
+    ## Post-change settle timer
+
+
+    def restart_settle_timeout(self, timeout=None):
+        """Starts (or restarts) the post-change settle timer for a profile.
+
+        The post-change settle timeout callback synchronizes the profile, and
+        updates its state depending on whether the batch-mode sync failed or
+        succeeded.  Calling this method repeatedly when files change on the
+        local end has the effect of waiting for bursts of changes to settle and
+        (heuristically) be less likely to happen during the subsequent sync.
+
+        """
+        if timeout is None:
+            timeout = self.SETTLE_INTERVAL
+        logging.debug("%s: restarting settle timer %ds" % (self, timeout))
+        self.stop_settle_timeout()
+        if self.state >= ProfileState.SYNCING:
+            logging.debug("%s: already syncing/paused/stopped: ignoring"
+                          % (self,))
+            return
+        self.state = ProfileState.CHANGED
+        cb = self._settle_time_elapsed
+        cb_id = GLib.timeout_add_seconds(timeout, cb)
+        self.timeout = cb_id
+
+
+    def stop_settle_timeout(self):
+        """Stops the post-change settle timer for a profile."""
+        logging.debug("%s: stopping settle timer" % (self,))
+        if self.timeout:
+            GLib.source_remove(self.timeout)
+        self.timeout = None
+        if self.state == ProfileState.CHANGED:
+            self.state = ProfileState.IDLE
+
+
+    def _settle_time_elapsed(self):
+        """Timeout callback: sync a single profile."""
+        logging.debug("%s: settle timer finished: syncing" % (self,))
+        cmd = UNISON_BATCH_CMD + [self.name]
+        GObject.idle_add(self.spawn_command, cmd, ProfileState.SYNCING)
+        return False
+
+
     ## Command spawning (via the central app)
 
 
@@ -514,8 +593,8 @@ class Profile (object):
 
     def spawn_command(self, cmd, runstate):
         """Run a per-profile command."""
-        self._app.stop_profile_settle_timeout(self)
-        self._app.stop_monitoring_profile(self)
+        self.stop_settle_timeout()
+        self.stop_monitoring()
         def _idle_cb():
             if self._app.spawn_command(cmd, self._command_finished_cb):
                 self.state = runstate
@@ -539,15 +618,15 @@ class Profile (object):
             self.state = ProfileState.ERROR
         else:
             # Same thing for the success case.
-            GObject.idle_add(self._app.start_monitoring_profile, self)
+            GObject.idle_add(self.start_monitoring)
             self.state = ProfileState.IDLE
+
 
 
 class App (object):
     """Main application instance."""
 
-    _LOCAL_CHANGE_SETTLE_INTERVAL = 5
-    _REMOTE_CHANGE_CHECK_INTERVAL = 300
+    REMOTE_CHECK_INTERVAL = 300
 
 
     ## Initialization and startup
@@ -559,7 +638,6 @@ class App (object):
         self.profiles = set()
         self._status_icon = StatusIcon(self)
         self._override_state = None
-        self._monitor = RecursiveDirMonitor(self)
         self._net_monitor = Gio.NetworkMonitor.get_default()
         self._net_monitor.connect("network-changed", self._network_changed)
         self._net_available = False
@@ -587,6 +665,7 @@ class App (object):
 
     ## Overall state (reflects profiles')
 
+
     @property
     def state(self):
         """Overall application state."""
@@ -605,7 +684,8 @@ class App (object):
 
 
     ## Remote checking timer
- 
+
+
     def restart_remote_checking(self):
         """Starts (or restarts) the periodic remote-checking timer.
 
@@ -615,7 +695,7 @@ class App (object):
         """
         self.stop_remote_checking()
         cb = self._remote_checking_due
-        interval = self._REMOTE_CHANGE_CHECK_INTERVAL
+        interval = self.REMOTE_CHECK_INTERVAL
         cb_id = GLib.timeout_add_seconds(interval, cb)
         self._remote_check_timeout_id = cb_id
 
@@ -645,9 +725,9 @@ class App (object):
         for profile in self.profiles:
             if profile.state in states:
                 profile.state = ProfileState.CHANGED # for the look
-                t = self._LOCAL_CHANGE_SETTLE_INTERVAL
-                t += int((random() * 3 * self._LOCAL_CHANGE_SETTLE_INTERVAL))
-                self.restart_profile_settle_timeout(profile, t)
+                t = Profile.SETTLE_INTERVAL
+                t += int(random() * 3 * t)
+                profile.restart_settle_timeout(t)
             # Clear the pause flag too.
             profile.pause_on_exit = False
 
@@ -664,8 +744,8 @@ class App (object):
             if profile.state in active_states:
                 profile.pause_on_exit = True
             else:
-                self.stop_monitoring_profile(profile)
-                self.stop_profile_settle_timeout(profile)
+                profile.stop_monitoring()
+                profile.stop_settle_timeout()
                 profile.state = ProfileState.PAUSED
         self.stop_remote_checking()
 
@@ -676,7 +756,7 @@ class App (object):
         self.restart_remote_checking()
 
 
-    ## Network and path monitoring
+    ## Network monitoring
 
 
     def _network_changed(self, net_monitor, available):
@@ -686,8 +766,8 @@ class App (object):
             for profile in self.profiles:
                 if profile.state not in nostop_states:
                     profile.state = ProfileState.OFFLINE
-                    self.stop_profile_settle_timeout(profile)
-                    self.stop_monitoring_profile(profile)
+                    profile.stop_settle_timeout()
+                    profile.stop_monitoring()
             self._net_available = False
         elif (not self._net_available) and available:
             logging.info("Network now available")
@@ -696,18 +776,6 @@ class App (object):
                             ProfileState.OFFLINE, ProfileState.ERROR]
             self._queue_profiles_in_states(start_states)
             self._net_available = True
-
-
-    def monitored_path_changed(self, path):
-        path = normalize_path(path)
-        profile = None
-        for profile in self.profiles:
-            if path in profile.monitored_paths:
-                break
-                # FIXME: overlaps will break things
-        if not profile:
-            return
-        self.restart_profile_settle_timeout(profile)
 
 
     ## Menu commands
@@ -767,14 +835,13 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
         dia.set_license(license_txt)
         dia.set_wrap_license(False)
         dia.set_version(PROGRAM_VERSION)
-        dia.set_copyright("Copyright © 2013 Andrew Chadwick "
-                          "<a.t.chadwick@gmail.com>")
+        dia.set_copyright(_("Copyright © 2013 Andrew Chadwick "
+                            "<a.t.chadwick@gmail.com>"))
         dia.set_comments(_("Automatically synchronizes files and folders in\n"
                            "your Unison profiles after you modify them."))
         dia.set_logo_icon_name("unison-gtk")
         dia.connect("response", lambda *a: dia.destroy())
         dia.run()
-        print "**dialog returned"
 
 
     ## Override commands
@@ -806,51 +873,8 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
         self.state_changed()
 
 
-    ## Profile post-change settle timer
-
-    def restart_profile_settle_timeout(self, profile, timeout=None):
-        """Starts (or restarts) the post-change settle timer for a profile.
-
-        The post-change settle timeout callback synchronizes the profile, and
-        updates its state depending on whether the batch-mode sync failed or
-        succeeded.  Calling this method repeatedly when files change on the
-        local end has the effect of waiting for bursts of changes to settle and
-        (heuristically) be less likely to happen during the subsequent sync.
-
-        """
-        if timeout is None:
-            timeout = self._LOCAL_CHANGE_SETTLE_INTERVAL
-        logging.debug("%s: restarting settle timer %ds" % (profile,timeout))
-        self.stop_profile_settle_timeout(profile)
-        if profile.state >= ProfileState.SYNCING:
-            logging.debug("%s: already syncing/paused/stopped: ignoring"
-                          % (profile,))
-            return
-        profile.state = ProfileState.CHANGED
-        cb = self._profile_settle_time_elapsed
-        cb_id = GLib.timeout_add_seconds(timeout, cb, profile)
-        profile.timeout = cb_id
-
-
-    def stop_profile_settle_timeout(self, profile):
-        """Stops the post-change settle timer for a profile."""
-        logging.debug("%s: stopping settle timer" % (profile,))
-        if profile.timeout:
-            GLib.source_remove(profile.timeout)
-        profile.timeout = None
-        if profile.state == ProfileState.CHANGED:
-            profile.state = ProfileState.IDLE
-
- 
-    def _profile_settle_time_elapsed(self, profile):
-        """Timeout callback: sync a single profile."""
-        logging.debug("%s: settle timer finished: syncing" % (profile,))
-        cmd = UNISON_BATCH_CMD + [profile.name]
-        GObject.idle_add(profile.spawn_command, cmd, ProfileState.SYNCING)
-        return False
-
-
     ## General command spawning
+
 
     def spawn_command(self, cmd, finish_cb, finish_data=None):
         """Spawn a command, and arrange for a callback to be run when it exits.
@@ -892,19 +916,6 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
             logging.info("pid=%d successful" % (pid, ))
             finish_cb(True, finish_data)
 
-
-
-    ## Profile monitoring
-
-
-    def start_monitoring_profile(self, profile):
-        for path in profile.monitored_paths:
-            self._monitor.add_path(path)
-
-    
-    def stop_monitoring_profile(self, profile):
-        for path in profile.monitored_paths:
-            self._monitor.remove_path(path)
 
 
 if __name__ == '__main__':
