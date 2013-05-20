@@ -1,0 +1,914 @@
+#!/usr/bin/python
+# -*- encoding: utf-8 -*-
+# Automated Unison Profile Synchronizer
+# Copyright (C) 2013  Andrew Chadwick <a.t.chadwick@gmail.com>
+# 
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+## Imports
+
+import os
+import sys
+import os.path
+from random import random
+import weakref
+import logging
+import traceback
+
+from gettext import gettext as _
+
+import gi
+from gi.repository import Gdk
+from gi.repository import Gtk
+from gi.repository import GLib
+from gi.repository import GObject
+from gi.repository import Gio
+
+## Constants
+
+#: Program name for the about box.
+PROGRAM_NAME = 'aUniSync'
+
+#: Program version for the about box.
+PROGRAM_VERSION = '0.0.1'
+
+#: Command to use for batch-mode synchronization (suffixed with profile name)
+UNISON_BATCH_CMD = ['unison', '-batch', '-silent', '-retry', '2']
+
+#: Command to use for manual intervention mode (suffixed with profile name for
+#: individual profiles, or not for the general configuration command.
+UNISON_MANUAL_CMD = ['unison-gtk']
+
+
+## Functions
+
+
+def normalize_path(root):
+    """Normalizes a local path to a canonical, absolute representation."""
+    root = os.path.normpath(root)
+    root = os.path.abspath(root)
+    return root
+
+
+## Class definitions
+
+class ProfileState:
+    """Profile state codes."""
+    UNKNOWN = 0  #: Status not known
+    IDLE = 1    #: Profile is in sync, and has not changed
+    CHANGED = 2  #: Files have changed, profile is waiting for auto-sync
+    SYNCING = 3  #: Automatic batch sync is running
+    MANUAL = 4  #: Manual intervention is happening, auto-sync is paused
+    OFFLINE = 6 #: Network is offline, auto-sync is paused
+    PAUSED = 7 #: Profile is manually paused
+    ERROR = 8  #: Error was detected: auto-sync is stopped
+
+
+class StatusIcon (Gtk.StatusIcon):
+    """App status icon, with a basic menu.
+
+    The icon shows the highest state code of all profiles, i.e. the one which
+    is hopefully most relevant to the user. The menu shows per-profile states,
+    and allows Unison to be invoked for manual intervention unless manual
+    intervention is already happening.
+    
+    """
+
+    ## Class constants
+
+    ICON_NAME = { ProfileState.UNKNOWN: 'ubuntuone-client-offline',
+                  ProfileState.IDLE: 'ubuntuone-client-idle',
+                  ProfileState.CHANGED: 'ubuntuone-client-updating',
+                  ProfileState.SYNCING: 'ubuntuone-client-updating',
+                  ProfileState.MANUAL: 'unison-gtk',
+                  ProfileState.OFFLINE: 'ubuntuone-client-offline',
+                  ProfileState.PAUSED: 'ubuntuone-client-offline',
+                  ProfileState.ERROR: 'ubuntuone-client-error', }
+    STATUS_TEXT = { ProfileState.UNKNOWN: _('Unknown State'),
+                    ProfileState.IDLE: _('Idle'),
+                    ProfileState.CHANGED: _('Updates Detected'),
+                    ProfileState.SYNCING: _('Synchronizing'),
+                    ProfileState.MANUAL: _('Running Unison Manually'),
+                    ProfileState.OFFLINE: _("Offline"),
+                    ProfileState.PAUSED: _("Paused"),
+                    ProfileState.ERROR: _('Errors Encountered'), }
+
+
+    def __init__(self, app):
+        """Initialise, connected to the main app."""
+        Gtk.StatusIcon.__init__(self)
+        self._app = app
+        self._menu = None
+        self.set_from_icon_name(self.ICON_NAME[ProfileState.UNKNOWN])
+        self.connect("popup-menu", self._popup_menu_cb)
+        self._profile_items = {}
+        self._update_menu()
+
+
+    def _update_menu(self):
+        """Updates the menu. Called when profile states change."""
+        if self._menu is None:
+            self._menu = Gtk.Menu()
+            item = Gtk.SeparatorMenuItem()
+            self._menu.append(item)
+            item = Gtk.ImageMenuItem.new_from_stock(Gtk.STOCK_PREFERENCES,None)
+            item.connect('activate', lambda *a: self._app.configure())
+            self._menu.append(item)
+            item = Gtk.ImageMenuItem.new_from_stock(Gtk.STOCK_ABOUT, None)
+            item.connect('activate', lambda *a: self._app.about())
+            self._menu.append(item)
+            item = Gtk.ImageMenuItem.new_from_stock(Gtk.STOCK_QUIT, None)
+            item.connect('activate', lambda *a: self._app.quit())
+            self._menu.append(item)
+        if self._app.profiles != set(self._profile_items.keys()):
+            for profile, item in self._profile_items.iteritems():
+                self._menu.remove(item)
+            self._profile_items = {}
+            for profile in self._app.profiles:
+                item = Gtk.ImageMenuItem(unicode(profile))
+                item.connect('activate', self._profile_menu_item_activate_cb,
+                             profile)
+                self._menu.insert(item, 0)
+                self._profile_items[profile] = item
+        for profile, item in self._profile_items.iteritems():
+            state = profile.state
+            icon_name = self.ICON_NAME[state]
+            image = Gtk.Image()
+            image.set_from_icon_name(icon_name, Gtk.IconSize.MENU)
+            item.set_image(image)
+            if state in [ProfileState.SYNCING, ProfileState.MANUAL]:
+                item.set_sensitive(False)
+            else:
+                item.set_sensitive(True)
+
+
+    def _profile_menu_item_activate_cb(self, item, profile):
+        """Menu command to launch a manual sync (Unison GUI) for a profile"""
+        profile.spawn_manual_sync()
+
+
+    def update_icon(self):
+        """Update the icon to show the app's overall state"""
+        state = self._app.state
+        self.set_from_icon_name(self.ICON_NAME[state])
+        tooltip = _("Unison: %s") % self.STATUS_TEXT[state]
+        self.set_tooltip_text(tooltip)
+        self._update_menu()
+
+
+    def _popup_menu_cb(self, status_icon, button, activate_time):
+        """Menu showing, with the appropriate position function"""
+        self._menu.show_all()
+        self._menu.popup(parent_menu_shell=None, parent_menu_item=None,
+                         func=Gtk.StatusIcon.position_menu, data=self,
+                         button=button, activate_time=activate_time)
+
+
+class RecursiveDirMonitor (object):
+    """Monitor directories via GIO (typically inotify on Linux)."""
+
+    ## Class constants
+
+    _QUERY_FLAGS = Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS
+    _MONITOR_FLAGS = Gio.FileMonitorFlags.NONE
+
+
+    def __init__(self, app):
+        """Construct, ready to report back to the app."""
+        super(RecursiveDirMonitor, self).__init__()
+        self._app = app
+        self._monitors_by_uri = {}
+    
+
+    def _add_monitor(self, directory, root, parent=None):
+        """Adds monitoring for a subtree
+
+        Always returns False, so it's suitable for use as an idle callback:
+        this is used internally for building the tree of monitors for
+        subdirectories. To test for success, check `self._monitors_by_uri`
+        for the root directory's URI after calling.
+
+        """
+        uri = directory.get_uri()
+        directory_type = directory.query_file_type(self._QUERY_FLAGS, None)
+        if directory_type != Gio.FileType.DIRECTORY:
+            logging.debug("Not watching %s: directories only" % (uri,))
+            return False
+        try:
+            flags = self._MONITOR_FLAGS
+            mon = Gio.File.monitor_directory(directory, flags, None)
+        except GLib.GError, err:
+            pass
+        if not mon:
+            return False
+        mon.__root = root
+        mon.__uri = uri
+        # Monitor child directories too
+        try:
+            attrs = ",".join([Gio.FILE_ATTRIBUTE_STANDARD_NAME,
+                              Gio.FILE_ATTRIBUTE_STANDARD_TYPE])
+            flags = self._QUERY_FLAGS
+            children = directory.enumerate_children(attrs, flags, None)
+        except GLib.GError, err:
+            logging.warning("not watching %s: %s" % (uri, err))
+            return False
+        mon.__parent = parent
+        if parent is not None:
+            if parent:
+                parent.__child_monitors.add(mon)
+        mon.__connid = mon.connect("changed", self._changed_cb)
+        mon.__child_monitors = set()
+        if uri in self._monitors_by_uri:
+            self._delete_monitor(self._monitors_by_uri[uri])
+        self._monitors_by_uri[uri] = mon
+        for child_info in children:
+            if child_info.get_file_type() == Gio.FileType.DIRECTORY:
+                child_name = child_info.get_name()
+                child_dir = directory.get_child(child_name)
+                GObject.idle_add(self._add_monitor, child_dir, root, mon)
+        logging.debug("Added monitor for %s" % (uri,))
+        return False
+
+
+    def _delete_monitor(self, monitor):
+        """Removes monitoring for a subtree."""
+        uri = monitor.__uri
+        logging.debug("Removing monitor for %s" % (uri,))
+        self._monitors_by_uri.pop(uri, None)
+        if monitor.__parent:
+            if monitor in monitor.__parent.__child_monitors:
+                monitor.__parent.__child_monitors.remove(monitor)
+            monitor.__parent = None
+        if monitor.__connid:
+            monitor.disconnect(monitor.__connid)
+            monitor.__connid = None
+        monitor.cancel()
+        for childmon in list(monitor.__child_monitors):
+            self._delete_monitor(childmon)
+        monitor.__child_monitors = set()
+
+
+    def _changed_cb(self, monitor, file1, file2, event):
+        """Handles changes: adds or removes monitoring, & notifies the app."""
+        root = monitor.__root
+        root_uri = Gio.File.new_for_path(root).get_uri()
+        if root_uri not in self._monitors_by_uri:
+            logging.debug("Not reporting change to %r: was removed" % (root,))
+            return
+        logging.debug("Changes detected in %r (%s)" % (root, event))
+        self._app.monitored_path_changed(root)
+        if event == Gio.FileMonitorEvent.CREATED:
+            file1_type = file1.query_file_type(self._QUERY_FLAGS, None)
+            if file1_type == Gio.FileType.DIRECTORY:
+                self._add_monitor(file1, root, monitor)
+        elif event == Gio.FileMonitorEvent.DELETED:
+            uri = file1.get_uri()
+            deadmon = self._monitors_by_uri.get(uri, None)
+            if deadmon:
+                self._delete_monitor(deadmon)
+
+
+    def add_path(self, root):
+        """Recursively adds a dirctory to the monitor.
+
+        All subdirectories of the path will be monitored for changes, which are
+        reported back to the main app via its ``monitored_path_changed()``
+        method.
+
+        """
+        if not os.path.exists(root):
+            return False
+        directory = Gio.File.new_for_path(root)
+        self._add_monitor(directory, root)
+        uri = directory.get_uri()
+        if self._monitors_by_uri.get(uri, None):
+            return True
+        return False
+
+
+    def remove_path(self, root):
+        """Removes a directory and cancels all monitoring on it."""
+        uri = Gio.File.new_for_path(root).get_uri()
+        root_mon = self._monitors_by_uri.get(uri, None)
+        if root_mon:
+            self._delete_monitor(root_mon)
+
+
+class Profile (object):
+    """Unison profile and state."""
+
+    PROFILE_DIR = ".unison"
+    PROFILE_SUFFIX = ".prf"
+
+    ## Construction
+
+    @classmethod
+    def load_profiles(cls, app):
+        """Returns a set of all valid user `Profile`s, freshly read from disk
+
+        Only profiles with at least one local root are considered valid.
+
+        """
+        profiles = set()
+        profile_dir = os.path.join(os.environ["HOME"], cls.PROFILE_DIR)
+        for ent in os.listdir(profile_dir):
+            if not ent.endswith(cls.PROFILE_SUFFIX):
+                continue
+            profile = Profile(app, os.path.join(profile_dir, ent))
+            nroots = len(profile._roots)
+            if nroots < 1:
+                logging.warning("%s: must have at least 1 local root: ignoring"
+                                % (profile,))
+            elif nroots > 2:
+                logging.warning("%s: more than 2 local roots: ignoring"
+                                % (profile,))
+            else:
+                profiles.add(profile)
+        return profiles
+
+
+    def __init__(self, app, filename):
+        """Initialize from a profile filename."""
+        super(Profile, self).__init__()
+        self._app = weakref.proxy(app)
+        # Defaults
+        assert filename.endswith(self.PROFILE_SUFFIX)
+        filename = normalize_path(filename)
+        name = os.path.basename(filename[:-len(self.PROFILE_SUFFIX)])
+        self._name = name   #: Canonical name of the profile
+        self._label = unicode(self._name)   #: Human-readable label
+        self._roots = set()  #: Local roots
+        self._paths = set()   #: Paths within roots, for monitoring
+        self._mountpoints = set()  #: Check-mounted points
+        # Cached values
+        self.__monitored_paths = set()
+        self.__mountpoint_paths = set()
+        # State and synchronization management
+        self._state = ProfileState.UNKNOWN
+        self.timeout = None
+        self.remove_on_exit = False
+        self.pause_on_exit = False
+        # Load config
+        loaded_configs = set()
+        fp = open(filename, 'r')
+        lines = fp.readlines()
+        fp.close()
+        loaded_configs.add(filename)
+        while len(lines) > 0:
+            line = lines.pop(0)
+            line = line.strip()
+            # Skip comments and blank lines
+            if line.startswith("#") or line == "":
+                continue
+            # Process directives
+            if line.split()[0].lower() == "include":
+                try:
+                    inc_directive, inc_name = line.split(None, 1)
+                except ValueError:
+                    logging.error("%r: failed to process include directive")
+                    continue
+                loaded_inc_file = False
+                potential_inc_files = [inc_name, inc_name+self.PROFILE_SUFFIX]
+                for inc_file in potential_inc_files:
+                    prf_dir = os.path.join(os.environ["HOME"], self.PROFILE_DIR)
+                    inc_file = os.path.join(prf_dir, inc_file)
+                    inc_file = normalize_path(inc_file)
+                    if inc_file in loaded_configs:
+                        logging.warning("%r: skipping circular include of %r"
+                                        % (filename, inc_file))
+                    elif os.path.isfile(inc_file):
+                        logging.debug("including %r" % (inc_file,))
+                        inc_fp = open(inc_file, "r")
+                        lines = inc_fp.readlines() + lines
+                        inc_fp.close()
+                        loaded_configs.add(inc_file)
+                        loaded_inc_file = True
+                        break
+                if not loaded_inc_file:
+                    logging.error("%r: include file %r not found"
+                                  % (filename, inc_name))
+                continue
+            # Process known key=value directives
+            try:
+                key, value = line.split('=', 1)
+            except ValueError:
+                continue
+            key = key.lower().strip()
+            value = value.strip()
+            if key == "root":
+                if not ("://" in value or value.startswith("//")):
+                    localroot = normalize_path(value)
+                    self._roots.add(localroot)
+            elif key == "path":
+                self._paths.add(value)
+            elif key == "mountpoint":
+                self._mountpoints.add(value)
+            elif key == "label":
+                self._label = unicode(value)
+
+
+
+    ## Public read-only properties
+
+
+    @property
+    def name(self):
+        return self._name
+
+
+    @property
+    def monitored_paths(self):
+        """Local paths to be monitored for this profile."""
+        if not self.__monitored_paths:
+            monpaths = set()
+            if self._paths:
+                for r in self._roots:
+                    for p in self._paths:
+                        p = normalize_path(os.path.join(r, p))
+                        monpaths.add(p)
+            else:
+                for r in self._roots:
+                    r = normalize_path(r)
+                    monpaths.add(r)
+            self.__monitored_paths = monpaths
+        return self.__monitored_paths.copy()
+
+
+    ## Standard overrides
+
+    def __repr__(self):
+        return "<Profile %r>" % (self.name,)
+
+    def __unicode__(self):
+        """Display name for the profile."""
+        result = unicode(self._label)
+        if self.remove_on_exit:
+            result = u"%s (obsolete)" % (result,)
+        return result
+
+    def __str__(self):
+        """ASCII-safe display name for the profile."""
+        result = repr(self._label)
+        if self.remove_on_exit:
+            result = "%s (obsolete)" % (result,)
+        return result
+
+    def __eq__(self, other):
+        """Profiles are equal if their names and dirs are the same."""
+        # State is deliberately ignored
+        return other.name == self.name \
+           and other._roots == self._roots \
+           and other._paths == self._paths \
+           and other._mountpoints == self._mountpoints \
+
+    def __hash__(self):
+        n = hash(self.name)
+        f = lambda a, b: a^b
+        n = reduce(f, [hash(a) for a in sorted(self._roots)], n)
+        n = reduce(f, [hash(a) for a in sorted(self._paths)], n)
+        n = reduce(f, [hash(a) for a in sorted(self._mountpoints)], n)
+        return n
+
+    ## State flag
+
+    @property
+    def state(self):
+        """The profile's current state; modification updates the UI."""
+        return self._state
+
+    @state.setter
+    def state(self, state):
+        """Set the profile's current state, and notify if it changed."""
+        oldstate = self._state
+        self._state = state
+        if state != oldstate:
+            self._app.state_changed()
+
+
+    ## Command spawning (via the central app)
+
+
+    def spawn_manual_sync(self):
+        """Spawns a manual synchronization (launches the GUI)"""
+        logging.info("%s: manual sync requested" % (self,))
+        nogo = [ProfileState.SYNCING, ProfileState.MANUAL]
+        if self.state in nogo:
+            logging.warning("%s: already syncing: manual sync not possible"
+                            % (self,))
+            return
+        self.state = ProfileState.MANUAL
+        cmd = UNISON_MANUAL_CMD + [self.name]
+        self.spawn_command(cmd, ProfileState.MANUAL)
+
+
+    def spawn_command(self, cmd, runstate):
+        """Run a per-profile command."""
+        self._app.stop_profile_settle_timeout(self)
+        self._app.stop_monitoring_profile(self)
+        def _idle_cb():
+            if self._app.spawn_command(cmd, self._command_finished_cb):
+                self.state = runstate
+            else:
+                self.state = ProfileState.ERROR
+            return False
+        GObject.idle_add(_idle_cb)
+
+
+    def _command_finished_cb(self, success, *_ignored):
+        """Per-profile command finished callback."""
+        if self.remove_on_exit:
+            logging.info("%s: removing at command exit" % (self,))
+            self._app.profiles.remove(self)
+            self.state = ProfileState.UNKNOWN
+        elif self.pause_on_exit:
+            logging.info("%s: pausing at command exit" % (self,))
+            self.state = ProfileState.PAUSED
+        elif not success:
+            # Failure will already have been logged fully
+            self.state = ProfileState.ERROR
+        else:
+            # Same thing for the success case.
+            GObject.idle_add(self._app.start_monitoring_profile, self)
+            self.state = ProfileState.IDLE
+
+
+class App (object):
+    """Main application instance."""
+
+    _LOCAL_CHANGE_SETTLE_INTERVAL = 5
+    _REMOTE_CHANGE_CHECK_INTERVAL = 300
+
+
+    ## Initialization and startup
+
+
+    def __init__(self):
+        """Initialize, in an unconfigured state."""
+        super(App, self).__init__()
+        self.profiles = set()
+        self._status_icon = StatusIcon(self)
+        self._override_state = None
+        self._monitor = RecursiveDirMonitor(self)
+        self._net_monitor = Gio.NetworkMonitor.get_default()
+        self._net_monitor.connect("network-changed", self._network_changed)
+        self._net_available = False
+        self._remote_check_timeout_id = None
+
+
+    def run(self):
+        """Load config and start the GTK main loop."""
+        self.reload_config()
+        self._orig_excepthook = sys.excepthook
+        sys.excepthook = self._handle_exception
+        self._net_available = False
+        available = self._net_monitor.get_property("network-available")
+        self._network_changed(self._net_monitor, available)
+        self.restart_remote_checking()
+        Gtk.main()
+
+
+    def _handle_exception(self, exctyp, value, tb):
+        traceback.print_exception(exctyp, value, tb, None, sys.stderr)
+        if exctyp == KeyboardInterrupt:
+            logging.info("Interrupted - exiting main loop")
+            Gtk.main_quit()
+
+
+    ## Overall state (reflects profiles')
+
+    @property
+    def state(self):
+        """Overall application state."""
+        if self._override_state:
+            return self._override_state
+        state = ProfileState.UNKNOWN
+        for profile in self.profiles:
+            if profile.state > state:
+                state = profile.state
+        return state
+
+
+    def state_changed(self):
+        """Called when the state of a profile changes."""
+        self._status_icon.update_icon()
+
+
+    ## Remote checking timer
+ 
+    def restart_remote_checking(self):
+        """Starts (or restarts) the periodic remote-checking timer.
+
+        The remote-checking timeout callback causes a synchronization of all
+        idle profiles to catch updates on the remote end.
+
+        """
+        self.stop_remote_checking()
+        cb = self._remote_checking_due
+        interval = self._REMOTE_CHANGE_CHECK_INTERVAL
+        cb_id = GLib.timeout_add_seconds(interval, cb)
+        self._remote_check_timeout_id = cb_id
+
+
+    def stop_remote_checking(self):
+        """Stops the periodic remote-checking timer."""
+        if not self._remote_check_timeout_id:
+            return
+        GLib.source_remove(self._remote_check_timeout_id)
+        self._remote_check_timeout_id = None
+
+
+    def _remote_checking_due(self):
+        """Timeout callback: sync idle profiles."""
+        if not self._remote_check_timeout_id:
+            return False
+        idle_states = [ProfileState.UNKNOWN, ProfileState.IDLE]
+        self._queue_profiles_in_states(idle_states)
+        return True
+
+
+    ## Utility methods
+
+
+    def _queue_profiles_in_states(self, states):
+        """Starts the post-change settle timer for profiles in given states"""
+        for profile in self.profiles:
+            if profile.state in states:
+                profile.state = ProfileState.CHANGED # for the look
+                t = self._LOCAL_CHANGE_SETTLE_INTERVAL
+                t += int((random() * 3 * self._LOCAL_CHANGE_SETTLE_INTERVAL))
+                self.restart_profile_settle_timeout(profile, t)
+            # Clear the pause flag too.
+            profile.pause_on_exit = False
+
+
+    def _pause_all(self):
+        """Pauses all inactive profiles, and stops remote checking.
+
+        While paused, active profiles will be paused automatically when their
+        command terminates.
+
+        """
+        active_states = [ProfileState.SYNCING, ProfileState.MANUAL]
+        for profile in self.profiles:
+            if profile.state in active_states:
+                profile.pause_on_exit = True
+            else:
+                self.stop_monitoring_profile(profile)
+                self.stop_profile_settle_timeout(profile)
+                profile.state = ProfileState.PAUSED
+        self.stop_remote_checking()
+
+
+    def _unpause_all(self):
+        """Unpauses all paused profiles, and restart remote checking."""
+        self._queue_profiles_in_states([ProfileState.PAUSED])
+        self.restart_remote_checking()
+
+
+    ## Network and path monitoring
+
+
+    def _network_changed(self, net_monitor, available):
+        if self._net_available and (not available):
+            logging.info("Network no longer available")
+            nostop_states = [ProfileState.SYNCING, ProfileState.MANUAL]
+            for profile in self.profiles:
+                if profile.state not in nostop_states:
+                    profile.state = ProfileState.OFFLINE
+                    self.stop_profile_settle_timeout(profile)
+                    self.stop_monitoring_profile(profile)
+            self._net_available = False
+        elif (not self._net_available) and available:
+            logging.info("Network now available")
+            # Start idle and offline profiles, and try to clear errors
+            start_states = [ProfileState.UNKNOWN, ProfileState.IDLE,
+                            ProfileState.OFFLINE, ProfileState.ERROR]
+            self._queue_profiles_in_states(start_states)
+            self._net_available = True
+
+
+    def monitored_path_changed(self, path):
+        path = normalize_path(path)
+        profile = None
+        for profile in self.profiles:
+            if path in profile.monitored_paths:
+                break
+                # FIXME: overlaps will break things
+        if not profile:
+            return
+        self.restart_profile_settle_timeout(profile)
+
+
+    ## Menu commands
+
+
+    def configure(self):
+        """Stop all synchronising, and run the configuration GUI."""
+        logging.info("launching configuration GUI")
+        self._spawn_override_command(UNISON_MANUAL_CMD)
+
+
+    def reload_config(self):
+        """Reloads Unison's config, updating the list of profiles."""
+        logging.info("(re)loading Unison profiles")
+        old_profiles = self.profiles
+        self.profiles = Profile.load_profiles(self)
+        # Keep unique old profiles that are still synchronizing or in manual
+        # mode. Mark them for removal when whatever's happening has been
+        # resolved.
+        old_profiles -= self.profiles
+        active_states = [ProfileState.CHANGED, ProfileState.SYNCING,
+                         ProfileState.MANUAL]
+        for profile in old_profiles:
+            if profile.state in active_states:
+                logging.info("%s: profile still active: marking for removal"
+                             % (profile,))
+                profile.remove_on_exit = True
+                self.profiles.add(profile)
+        starting_states = [ProfileState.UNKNOWN]
+        self._queue_profiles_in_states(starting_states)
+        self.state_changed()
+
+
+    def quit(self):
+        """Exit GTK's main loop."""
+        Gtk.main_quit()
+
+
+    def about(self):
+        """Show the about dialog"""
+        dia = Gtk.AboutDialog()
+        dia.set_program_name(PROGRAM_NAME)
+        dia.set_license_type(Gtk.License.GPL_3_0)
+        license_txt = _("""
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program.  If not, see <http://www.gnu.org/licenses/>.
+""")
+        dia.set_license(license_txt)
+        dia.set_wrap_license(False)
+        dia.set_version(PROGRAM_VERSION)
+        dia.set_copyright("Copyright © 2013 Andrew Chadwick "
+                          "<a.t.chadwick@gmail.com>")
+        dia.set_comments(_("Automatically synchronizes files and folders in\n"
+                           "your Unison profiles after you modify them."))
+        dia.set_logo_icon_name("unison-gtk")
+        dia.connect("response", lambda *a: dia.destroy())
+        dia.run()
+        print "**dialog returned"
+
+
+    ## Override commands
+
+    def _spawn_override_command(self, cmd, override_state=ProfileState.MANUAL):
+        """Spawns an override command.
+
+        Running an override command pauses any idle, unknown, or changed
+        profiles, and arranges for profiles running a command to pause when
+        ther command finish. Override commands are intended for editing the
+        entirety of Unison's configuration.
+
+        """
+        self._pause_all()
+        def _idle_cb():
+            if self.spawn_command(cmd, self._override_command_finished_cb):
+                self._override_state = override_state
+                self.state_changed()
+            else:
+                GObject.idle_add(self._unpause_all)
+        GObject.idle_add(_idle_cb)
+
+
+    def _override_command_finished_cb(self, success, data):
+        """Override command finished callback."""
+        self._override_state = None
+        self.reload_config()
+        self._unpause_all()
+        self.state_changed()
+
+
+    ## Profile post-change settle timer
+
+    def restart_profile_settle_timeout(self, profile, timeout=None):
+        """Starts (or restarts) the post-change settle timer for a profile.
+
+        The post-change settle timeout callback synchronizes the profile, and
+        updates its state depending on whether the batch-mode sync failed or
+        succeeded.  Calling this method repeatedly when files change on the
+        local end has the effect of waiting for bursts of changes to settle and
+        (heuristically) be less likely to happen during the subsequent sync.
+
+        """
+        if timeout is None:
+            timeout = self._LOCAL_CHANGE_SETTLE_INTERVAL
+        logging.debug("%s: restarting settle timer %ds" % (profile,timeout))
+        self.stop_profile_settle_timeout(profile)
+        if profile.state >= ProfileState.SYNCING:
+            logging.debug("%s: already syncing/paused/stopped: ignoring"
+                          % (profile,))
+            return
+        profile.state = ProfileState.CHANGED
+        cb = self._profile_settle_time_elapsed
+        cb_id = GLib.timeout_add_seconds(timeout, cb, profile)
+        profile.timeout = cb_id
+
+
+    def stop_profile_settle_timeout(self, profile):
+        """Stops the post-change settle timer for a profile."""
+        logging.debug("%s: stopping settle timer" % (profile,))
+        if profile.timeout:
+            GLib.source_remove(profile.timeout)
+        profile.timeout = None
+        if profile.state == ProfileState.CHANGED:
+            profile.state = ProfileState.IDLE
+
+ 
+    def _profile_settle_time_elapsed(self, profile):
+        """Timeout callback: sync a single profile."""
+        logging.debug("%s: settle timer finished: syncing" % (profile,))
+        cmd = UNISON_BATCH_CMD + [profile.name]
+        GObject.idle_add(profile.spawn_command, cmd, ProfileState.SYNCING)
+        return False
+
+
+    ## General command spawning
+
+    def spawn_command(self, cmd, finish_cb, finish_data=None):
+        """Spawn a command, and arrange for a callback to be run when it exits.
+
+        When the command in the sequence `cmd` exits, the callable `finish_cb`
+        is called as ``finish_cb(SUCCESS, finish_data)`` where SUCCESS is a
+        boolean value indicating success or failure of the command line.
+
+        """
+        cmd = [word.encode("utf-8") for word in cmd]
+        cmdline = " ".join(cmd)
+        logging.info("spawning command `%s`" % (cmdline,))
+        flags = GLib.SpawnFlags.SEARCH_PATH|GLib.SpawnFlags.DO_NOT_REAP_CHILD
+        cwd = os.path.abspath(os.getcwd())
+        pid = None
+        try:
+            envp = ["%s=%s" % (k, os.environ[k]) for k in os.environ]
+            spawn_rv = GLib.spawn_async(argv=cmd, envp=envp, flags=flags)
+            pid, stdin, stdout, stderr = spawn_rv
+        except GLib.GError, err:
+            logging.error(repr(err))
+        if pid is not None:
+            GLib.child_watch_add(pid, self._command_finished_cb,
+                                 [finish_cb, finish_data])
+            logging.debug("spawned pid=%s" % (pid, ))
+        else:
+            logging.error("failed to launch `%s`" % (cmdline,))
+        return pid
+
+
+    def _command_finished_cb(self, pid, condition, data):
+        """General command finished callback."""
+        GLib.spawn_close_pid(pid)
+        finish_cb, finish_data = data
+        if condition != 0:
+            logging.error("pid=%d failed: rc=%s" % (pid, condition))
+            finish_cb(False, finish_data)
+        else:
+            logging.info("pid=%d successful" % (pid, ))
+            finish_cb(True, finish_data)
+
+
+
+    ## Profile monitoring
+
+
+    def start_monitoring_profile(self, profile):
+        for path in profile.monitored_paths:
+            self._monitor.add_path(path)
+
+    
+    def stop_monitoring_profile(self, profile):
+        for path in profile.monitored_paths:
+            self._monitor.remove_path(path)
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    app = App()
+    app.run()
+
