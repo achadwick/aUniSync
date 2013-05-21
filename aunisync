@@ -73,8 +73,9 @@ class ProfileState:
     UNKNOWN = 0  #: Status not known
     IDLE = 1    #: Profile is in sync, and has not changed
     CHANGED = 2  #: Files have changed, profile is waiting for auto-sync
-    SYNCING = 3  #: Automatic batch sync is running
-    MANUAL = 4  #: Manual intervention is happening, auto-sync is paused
+    DUE = 3   #: Timer elapsed, sync is due
+    SYNCING = 4  #: Automatic batch sync is running
+    MANUAL = 5  #: Manual intervention is happening, auto-sync is paused
     OFFLINE = 6 #: Network is offline, auto-sync is paused
     PAUSED = 7 #: Profile is manually paused
     ERROR = 8  #: Error was detected: auto-sync is stopped
@@ -95,6 +96,7 @@ class StatusIcon (Gtk.StatusIcon):
     ICON_NAME = { ProfileState.UNKNOWN: 'ubuntuone-client-offline',
                   ProfileState.IDLE: 'ubuntuone-client-idle',
                   ProfileState.CHANGED: 'ubuntuone-client-updating',
+                  ProfileState.DUE: 'ubuntuone-client-updating',
                   ProfileState.SYNCING: 'ubuntuone-client-updating',
                   ProfileState.MANUAL: 'unison-gtk',
                   ProfileState.OFFLINE: 'ubuntuone-client-offline',
@@ -103,6 +105,7 @@ class StatusIcon (Gtk.StatusIcon):
     STATUS_TEXT = { ProfileState.UNKNOWN: _('Unknown State'),
                     ProfileState.IDLE: _('Idle'),
                     ProfileState.CHANGED: _('Updates Detected'),
+                    ProfileState.DUE: _('Synchronization Due'),
                     ProfileState.SYNCING: _('Synchronizing'),
                     ProfileState.MANUAL: _('Running Unison Manually'),
                     ProfileState.OFFLINE: _("Offline"),
@@ -367,7 +370,7 @@ class Profile (object):
         self._monitor = RecursiveDirMonitor(self)
         # State and synchronization management
         self._state = ProfileState.UNKNOWN
-        self.timeout = None
+        self._settle_timeout = None
         self.remove_on_exit = False
         self.pause_on_exit = False
         # Load config
@@ -547,35 +550,69 @@ class Profile (object):
             timeout = self.SETTLE_INTERVAL
         logging.debug("%s: restarting settle timer %ds" % (self, timeout))
         self.stop_settle_timeout()
-        if self.state >= ProfileState.SYNCING:
-            logging.debug("%s: already syncing/paused/stopped: ignoring"
+        restart_states = [ProfileState.UNKNOWN, ProfileState.IDLE,
+                          ProfileState.CHANGED]
+        if self.state not in restart_states:
+            logging.debug("%s: not idle: ignoring"
                           % (self,))
             return
         self.state = ProfileState.CHANGED
         cb = self._settle_time_elapsed
         cb_id = GLib.timeout_add_seconds(timeout, cb)
-        self.timeout = cb_id
+        self._settle_timeout = cb_id
 
 
     def stop_settle_timeout(self):
         """Stops the post-change settle timer for a profile."""
         logging.debug("%s: stopping settle timer" % (self,))
-        if self.timeout:
-            GLib.source_remove(self.timeout)
-        self.timeout = None
-        if self.state == ProfileState.CHANGED:
+        if self._settle_timeout:
+            GLib.source_remove(self._settle_timeout)
+        self._settle_timeout = None
+        if self.state in [ProfileState.CHANGED, ProfileState.DUE]:
             self.state = ProfileState.IDLE
 
 
     def _settle_time_elapsed(self):
         """Timeout callback: sync a single profile."""
-        logging.debug("%s: settle timer finished: syncing" % (self,))
-        cmd = UNISON_BATCH_CMD + [self.name]
-        GObject.idle_add(self.spawn_command, cmd, ProfileState.SYNCING)
-        return False
+        logging.debug("%s: settle timer finished" % (self,))
+        assert self.state == ProfileState.CHANGED
+        # Slight duplication (command spawning does this too), but need to
+        # avoid update tennis when there are overlaps.
+        self.stop_settle_timeout()
+        self.stop_monitoring()
+        # Try to defer after already-running overlapping profiles
+        defer_after_states = [ProfileState.DUE, ProfileState.SYNCING]
+        for profile in self._app.profiles:
+            if profile is self:
+                continue
+            if self.overlaps(profile):
+                logging.debug("%s (%s) overlaps %s (%s)"
+                              % (self, self.state, profile, profile.state))
+                if profile.state in defer_after_states:
+                    logging.info("%s: deferring till after %s"
+                                 % (self, profile))
+                    self.state = ProfileState.DUE
+                    return
+        # This profile is the first, or has unique monitored paths, so
+        # it can be processed now.
+        self.state = ProfileState.DUE
+        GObject.idle_add(self._spawn_batch_sync) # for some reason, idle needed
+
+
+    def overlaps(self, other):
+        disjoint = self.monitored_paths.isdisjoint(other.monitored_paths)
+        return not disjoint
 
 
     ## Command spawning (via the central app)
+
+
+    def _spawn_batch_sync(self):
+        """Spawns a batch-mode sync."""
+        if self.state != ProfileState.DUE:
+            return
+        cmd = UNISON_BATCH_CMD + [self.name]
+        self.spawn_command(cmd, ProfileState.SYNCING)
 
 
     def spawn_manual_sync(self):
@@ -617,10 +654,17 @@ class Profile (object):
             # Failure will already have been logged fully
             self.state = ProfileState.ERROR
         else:
-            # Same thing for the success case.
             GObject.idle_add(self.start_monitoring)
             self.state = ProfileState.IDLE
-
+        # Try and run just one remaining due sync
+        for profile in self._app.profiles:
+            if profile is self:
+                continue
+            if profile.state == ProfileState.DUE:
+                logging.info("%s: was deferred: now running (after %s)"
+                             % (profile, self))
+                profile._spawn_batch_sync()
+                break
 
 
 class App (object):
