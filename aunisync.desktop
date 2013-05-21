@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
 Version=1.1
-Name=aunisync
-GenericName=Automatic File and Folder Synchroniser
+Name=aUniSync
+GenericName=File and Folder Synchroniser
 Categories=Application;GTK;Internet;Net
-Comment=Automatically synchronize files and folders in your Unison profiles whenever you modify them
+Comment=Automatically synchronize changed files and folders with Unison
 Exec=aunisync
 TryExec=aunisync
 StartupNotify=false
