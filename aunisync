@@ -93,15 +93,15 @@ class StatusIcon (Gtk.StatusIcon):
 
     ## Class constants
 
-    ICON_NAME = { ProfileState.UNKNOWN: 'ubuntuone-client-offline',
-                  ProfileState.IDLE: 'ubuntuone-client-idle',
-                  ProfileState.CHANGED: 'ubuntuone-client-updating',
-                  ProfileState.DUE: 'ubuntuone-client-updating',
-                  ProfileState.SYNCING: 'ubuntuone-client-updating',
-                  ProfileState.MANUAL: 'unison-gtk',
-                  ProfileState.OFFLINE: 'ubuntuone-client-offline',
-                  ProfileState.PAUSED: 'ubuntuone-client-offline',
-                  ProfileState.ERROR: 'ubuntuone-client-error', }
+    ICON_NAME = { ProfileState.UNKNOWN: 'aunisync-idle-symbolic',
+                  ProfileState.IDLE: 'aunisync-idle-symbolic',
+                  ProfileState.CHANGED: 'aunisync-changed-symbolic',
+                  ProfileState.DUE: 'aunisync-changed-symbolic',
+                  ProfileState.SYNCING: 'aunisync-active-symbolic',
+                  ProfileState.MANUAL: 'aunisync-properties-symbolic',
+                  ProfileState.OFFLINE: 'aunisync-offline-symbolic',
+                  ProfileState.PAUSED: 'aunisync-paused-symbolic',
+                  ProfileState.ERROR: 'aunisync-error-symbolic', }
     STATUS_TEXT = { ProfileState.UNKNOWN: _('Unknown State'),
                     ProfileState.IDLE: _('Idle'),
                     ProfileState.CHANGED: _('Updates Detected'),
@@ -116,12 +116,16 @@ class StatusIcon (Gtk.StatusIcon):
     def __init__(self, app):
         """Initialise, connected to the main app."""
         Gtk.StatusIcon.__init__(self)
+        theme = Gtk.IconTheme.get_default()
+        print theme.get_search_path()
         self._app = app
         self._menu = None
         self.set_from_icon_name(self.ICON_NAME[ProfileState.UNKNOWN])
         self.connect("popup-menu", self._popup_menu_cb)
         self._profile_items = {}
         self._update_menu()
+        self._size = None
+        self.connect("size-changed", self._size_changed_cb)
 
 
     def _update_menu(self):
@@ -169,10 +173,50 @@ class StatusIcon (Gtk.StatusIcon):
     def update_icon(self):
         """Update the icon to show the app's overall state"""
         state = self._app.state
-        self.set_from_icon_name(self.ICON_NAME[state])
-        tooltip = _("Unison: %s") % self.STATUS_TEXT[state]
+        icon_name = self.ICON_NAME[state]
+        status_text = self.STATUS_TEXT[state]
+        # Symbolic icons fakery.
+        # https://mail.gnome.org/archives/gtk-list/2013-May/msg00016.html
+        # GtkStatusIcon may eventually do this itself.
+        loaded = False
+        screen = self.get_screen()
+        if icon_name.endswith("-symbolic") and self._size and screen:
+            # Not too happy with this size-setting fudge.
+            # Looks OK in Xfce4 when using a borderless tray and icons from
+            # gnome-icon-theme-symbolic. Really need some custom symbolic
+            # icons for Unison though.
+            size = max(8, self._size)
+            for sanesize in [16, 22, 24, 32, 48, 64]:
+                if sanesize > self._size:
+                    break
+                size = sanesize
+            # Simulate the GtkImage path of GtkStatusIcon's internal one
+            fakepath = Gtk.WidgetPath()
+            fakepath.append_type(Gtk.Image)
+            fakestyle = Gtk.StyleContext()
+            fakestyle.set_path(fakepath)
+            # Can also add classes: "warning" and "error" work here
+            #fakestyle.add_class("warning")
+            theme = Gtk.IconTheme.get_for_screen(self.get_screen())
+            iconflags = ( Gtk.IconLookupFlags.FORCE_SVG |
+                          Gtk.IconLookupFlags.FORCE_SIZE )
+            iconinfo = theme.lookup_icon(icon_name, size, iconflags)
+            pixbuf, was_symb = iconinfo.load_symbolic_for_context(fakestyle)
+            if was_symb:
+                self.set_from_pixbuf(pixbuf)
+                loaded = True
+                # FIXME: should cache these.
+        if not loaded:
+            self.set_from_icon_name(icon_name)
+        tooltip = _("Unison: %s") % (status_text,)
         self.set_tooltip_text(tooltip)
         self._update_menu()
+
+
+    def _size_changed_cb(self, statusicon, size):
+        self._size = size
+        self.update_icon()
+
 
 
     def _popup_menu_cb(self, status_icon, button, activate_time):

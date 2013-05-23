@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   version="1.1"
+   width="16"
+   height="16"
+   id="svg2994"
+   inkscape:version="0.48.3.1 r9886"
+   sodipodi:docname="aunisync-offline-symbolic.svg">
+  <sodipodi:namedview
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1"
+     objecttolerance="10"
+     gridtolerance="10"
+     guidetolerance="10"
+     inkscape:pageopacity="0"
+     inkscape:pageshadow="2"
+     inkscape:window-width="1280"
+     inkscape:window-height="1024"
+     id="namedview3983"
+     showgrid="true"
+     inkscape:zoom="5.2149125"
+     inkscape:cx="56.347846"
+     inkscape:cy="-1.6777093"
+     inkscape:window-x="1280"
+     inkscape:window-y="0"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg2994">
+    <inkscape:grid
+       type="xygrid"
+       id="grid3985" />
+  </sodipodi:namedview>
+  <title
+     id="title2988">aUniSync symbolic icon</title>
+  <defs
+     id="defs2996" />
+  <metadata
+     id="metadata2999">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title>aUniSync symbolic icon</dc:title>
+        <cc:license
+           rdf:resource="http://creativecommons.org/licenses/by-sa/3.0/" />
+        <dc:creator>
+          <cc:Agent>
+            <dc:title>Andrew Chadwick</dc:title>
+          </cc:Agent>
+        </dc:creator>
+        <dc:contributor>
+          <cc:Agent>
+            <dc:title>GNOME Project</dc:title>
+          </cc:Agent>
+        </dc:contributor>
+        <dc:description>Symbolic icon theme for aUniSync; elements taken from gnome-icon-theme-symbolic. Please link to http://www.gnome.org and attribute to &quot;GNOME Project&quot;. No need to attribute me.</dc:description>
+        <dc:date>2013-05-22</dc:date>
+      </cc:Work>
+      <cc:License
+         rdf:about="http://creativecommons.org/licenses/by-sa/3.0/">
+        <cc:permits
+           rdf:resource="http://creativecommons.org/ns#Reproduction" />
+        <cc:permits
+           rdf:resource="http://creativecommons.org/ns#Distribution" />
+        <cc:requires
+           rdf:resource="http://creativecommons.org/ns#Notice" />
+        <cc:requires
+           rdf:resource="http://creativecommons.org/ns#Attribution" />
+        <cc:permits
+           rdf:resource="http://creativecommons.org/ns#DerivativeWorks" />
+        <cc:requires
+           rdf:resource="http://creativecommons.org/ns#ShareAlike" />
+      </cc:License>
+    </rdf:RDF>
+  </metadata>
+  <path
+     inkscape:connector-curvature="0"
+     style="color:#bebebe;fill:#bebebe;fill-opacity:1;stroke:none;stroke-width:2;marker:none;visibility:visible;display:inline;overflow:visible"
+     id="path3761-2-3-5-4-8-9-8-0"
+     d="M 9,9 10.375,9 11.5,10.09375 12.59375,9 14,9 14,10.46875 12.90625,11.53125 14,12.59375 14,14 12.5625,14 11.5,12.9375 10.4375,14 9,14 9,12.59375 10.0625,11.53125 9,10.46875 9,9 z" />
+  <path
+     style="font-size:42.26685333000000355px;font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;writing-mode:lr-tb;text-anchor:start;color:#bebebe;fill:#bebebe;fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:1;marker:none;visibility:visible;display:inline;overflow:visible;enable-background:new;font-family:Arial;opacity:0.35"
+     d="M 4 1.5 L 1.5 4 L 3 4 L 3 10 C 3 12 4.5 14 7.5 14 C 7.676073 14 7.8342609 13.982124 8 13.96875 L 8 12.59375 C 7.9987186 12.538441 8.0231718 12.492186 8.03125 12.4375 C 7.8648193 12.463809 7.6936475 12.5 7.5 12.5 C 5.5 12.5 5 11 5 10 L 5 4 L 6.5 4 L 4 1.5 z M 11 1.5 L 8.5 4 L 10 4 L 10 8 L 10.375 8 C 10.62867 8.0019888 10.88017 8.1048751 11.0625 8.28125 L 11.46875 8.6875 L 11.875 8.28125 C 11.911281 8.2461299 11.958758 8.2165614 12 8.1875 L 12 4 L 13.5 4 L 11 1.5 z "
+     id="text1291-7" />
+</svg>
