@@ -14,7 +14,7 @@ After installation (see below), aUniSync can be run from your desktop's main men
 
 When running aUniSync for the first time, nothing will happen until you set up some Unison profles to synchronize. aUniSync allows you to launch the main Unison GUI from its status icon's "Preferences" menu item. From there you can create and test new profiles and synchronize them for the first time before turning things over to aUniSync's control. While the Unison GUI is visible, aUniSync pauses its profiles
 
-<center>![Status icon menu](images/statusiconmenu.png)</center>
+<center>![Status icon menu](https://github.com/achadwick/aUniSync/raw/master/images/statusiconmenu.png)</center>
 
 The status icon's menu also lists out the profiles being managed, and allows them to be synchronized manually. Select a profile from the menu to launch Unison with the profile name as an argument. Note that this pauses automatic synchronization while the Unison window is open.
 
@@ -22,33 +22,33 @@ The status icon's menu also lists out the profiles being managed, and allows the
 
 When aUniSync is running normally and synchronizing profiles, you'll see one of the following icons:
 
-> **Idle: ![the Unison logo on its own, in a subdued colour](icons/status/aunisync-idle-symbolic.svg)**
+> **Idle: ![the Unison logo on its own, in a subdued colour](https://github.com/achadwick/aUniSync/raw/master/icons/status/aunisync-idle-symbolic.svg)**
 
 > > No files or folders have changed recently, and no synchronization is being done.
 
-> **Changed: ![the Unison logo on its own, in bold](icons/status/aunisync-changed-symbolic.svg)**
+> **Changed: ![the Unison logo on its own, in bold](https://github.com/achadwick/aUniSync/raw/master/icons/status/aunisync-changed-symbolic.svg)**
 
 > > Files or folders have been changed recently, and they will be synchronized shortly. There's a short lead time of about 5 seconds to handle bursts of updates.
 
-> **Syncing: ![the same logo with a pair of "synchronizing" arrows](icons/status/aunisync-active-symbolic.svg)**
+> **Syncing: ![the same logo with a pair of "synchronizing" arrows](https://github.com/achadwick/aUniSync/raw/master/icons/status/aunisync-active-symbolic.svg)**
 
 > > Currently synchronizing. This will be seen every so often even when the profile is otherwise idle because aUniSync occasionally polls for changes just in case the other end has changed.
 
 If normal synchronization is interrupted for some reason, the icon shows why: 
 
-> **Manual Intervention: ![a gearwheel on the logo](icons/status/aunisync-properties-symbolic.svg)** 
+> **Manual Intervention: ![a gearwheel on the logo](https://github.com/achadwick/aUniSync/raw/master/icons/status/aunisync-properties-symbolic.svg)** 
 
 > > aUniSync is running the regular Unison GUI for *this profile only*. Automatic synchronization is paused, and will resume when Unison exits.
 
-> **Paused: ![the "paused" symbol on to the logo](icons/status/aunisync-paused-symbolic.svg)**
+> **Paused: ![the "paused" symbol on to the logo](https://github.com/achadwick/aUniSync/raw/master/icons/status/aunisync-paused-symbolic.svg)**
 
 > > The Unison GUI is running for *all profiles*, and synchronization is paused. In other words, Unison is running in "Preferences" mode. This mode allows new profiles to be added. When the Unison window is closed, aUniSync will reload its configuration and start synchronizing profiles again, inclusing any new ones.
 
-> **Offline: ![an "X" mark next to the logo](icons/status/aunisync-offline-symbolic.svg)**
+> **Offline: ![an "X" mark next to the logo](https://github.com/achadwick/aUniSync/raw/master/icons/status/aunisync-offline-symbolic.svg)**
 
 > > The network is offline, and automatic synchronization is paused. When connectivity resumes, this flag will be cleared and automatic synchronizing will resume.
 
-> **Error: ![an exclamation mark next to the logo](icons/status/aunisync-error-symbolic.svg)**
+> **Error: ![an exclamation mark next to the logo](https://github.com/achadwick/aUniSync/raw/master/icons/status/aunisync-error-symbolic.svg)**
 
 > > Unison encountered a problem during batch-mode synchronization. The two ends of the profile are probably not fully synchronized. When network connectivity resumes, aUniSync makes an attempt to sync it anyway so don't worry too much about this if you see it briefly after un-suspending your laptop. If it persists, the problem might be solvable by launching the Unison GUI for the profile that's showing the error flag.
 
