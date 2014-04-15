@@ -27,6 +27,7 @@ from random import random
 import weakref
 import logging
 import traceback
+logger = logging.getLogger(__name__)
 
 from gettext import gettext as _
 
@@ -117,7 +118,7 @@ class StatusIcon (Gtk.StatusIcon):
         """Initialise, connected to the main app."""
         Gtk.StatusIcon.__init__(self)
         theme = Gtk.IconTheme.get_default()
-        print theme.get_search_path()
+        logger.debug("icon theme search path: %r", theme.get_search_path())
         self._app = app
         self._menu = None
         self.set_from_icon_name(self.ICON_NAME[ProfileState.UNKNOWN])
@@ -242,7 +243,7 @@ class RecursiveDirMonitor (object):
         super(RecursiveDirMonitor, self).__init__()
         self._profile = weakref.proxy(profile)
         self._monitors_by_uri = {}
-    
+
 
     def _add_monitor(self, directory, root, parent=None):
         """Adds monitoring for a subtree
@@ -256,13 +257,14 @@ class RecursiveDirMonitor (object):
         uri = directory.get_uri()
         directory_type = directory.query_file_type(self._QUERY_FLAGS, None)
         if directory_type != Gio.FileType.DIRECTORY:
-            logging.debug("Not watching %s: directories only" % (uri,))
+            logger.debug("Not watching %r: directories only", uri)
             return False
         try:
             flags = self._MONITOR_FLAGS
             mon = Gio.File.monitor_directory(directory, flags, None)
         except GLib.GError, err:
-            pass
+            logger.exception("Failed to monitor %r", uri)
+            mon = None
         if not mon:
             return False
         mon.__root = root
@@ -274,7 +276,7 @@ class RecursiveDirMonitor (object):
             flags = self._QUERY_FLAGS
             children = directory.enumerate_children(attrs, flags, None)
         except GLib.GError, err:
-            logging.warning("not watching %s: %s" % (uri, err))
+            logger.exception("Failed to add child monitors for %r", uri)
             return False
         mon.__parent = parent
         if parent is not None:
@@ -290,14 +292,14 @@ class RecursiveDirMonitor (object):
                 child_name = child_info.get_name()
                 child_dir = directory.get_child(child_name)
                 GObject.idle_add(self._add_monitor, child_dir, root, mon)
-        logging.debug("Added monitor for %s" % (uri,))
+        logger.debug("Added monitor for %r", uri)
         return False
 
 
     def _delete_monitor(self, monitor):
         """Removes monitoring for a subtree."""
         uri = monitor.__uri
-        logging.debug("Removing monitor for %s" % (uri,))
+        logger.debug("Removing monitor for %r", uri)
         self._monitors_by_uri.pop(uri, None)
         if monitor.__parent:
             if monitor in monitor.__parent.__child_monitors:
@@ -317,9 +319,9 @@ class RecursiveDirMonitor (object):
         root = monitor.__root
         root_uri = Gio.File.new_for_path(root).get_uri()
         if root_uri not in self._monitors_by_uri:
-            logging.debug("Not reporting change to %r: was removed" % (root,))
+            logger.debug("Not reporting change in %r: was removed", root)
             return
-        logging.debug("Changes detected in %r (%s)" % (root, event))
+        logger.debug("Changes detected in %r (%r)", root, event)
         self._profile.monitored_path_changed(root)
         if event == Gio.FileMonitorEvent.CREATED:
             file1_type = file1.query_file_type(self._QUERY_FLAGS, None)
@@ -384,11 +386,11 @@ class Profile (object):
             profile = Profile(app, os.path.join(profile_dir, ent))
             nroots = len(profile._roots)
             if nroots < 1:
-                logging.warning("%s: must have at least 1 local root: ignoring"
-                                % (profile,))
+                logger.warning("%s: must have at least 1 local root: ignoring",
+                               profile)
             elif nroots > 2:
-                logging.warning("%s: more than 2 local roots: ignoring"
-                                % (profile,))
+                logger.warning("%s: more than 2 local roots: ignoring",
+                               profile)
             else:
                 profiles.add(profile)
         return profiles
@@ -434,7 +436,8 @@ class Profile (object):
                 try:
                     inc_directive, inc_name = line.split(None, 1)
                 except ValueError:
-                    logging.error("%r: failed to process include directive")
+                    logger.error("%r: failed to process include directive %r",
+                                 filename, line)
                     continue
                 loaded_inc_file = False
                 potential_inc_files = [inc_name, inc_name+self.PROFILE_SUFFIX]
@@ -443,10 +446,10 @@ class Profile (object):
                     inc_file = os.path.join(prf_dir, inc_file)
                     inc_file = normalize_path(inc_file)
                     if inc_file in loaded_configs:
-                        logging.warning("%r: skipping circular include of %r"
-                                        % (filename, inc_file))
+                        logger.warning("%r: skipping circular include of %r",
+                                       filename, inc_file)
                     elif os.path.isfile(inc_file):
-                        logging.debug("including %r" % (inc_file,))
+                        logger.debug("including %r", inc_file)
                         inc_fp = open(inc_file, "r")
                         lines = inc_fp.readlines() + lines
                         inc_fp.close()
@@ -454,8 +457,8 @@ class Profile (object):
                         loaded_inc_file = True
                         break
                 if not loaded_inc_file:
-                    logging.error("%r: include file %r not found"
-                                  % (filename, inc_name))
+                    logger.error("%r: include file %r not found",
+                                 filename, inc_name)
                 continue
             # Process known key=value directives
             try:
@@ -592,13 +595,12 @@ class Profile (object):
         """
         if timeout is None:
             timeout = self.SETTLE_INTERVAL
-        logging.debug("%s: restarting settle timer %ds" % (self, timeout))
+        logger.debug("%s: restarting settle timer %ds", self, timeout)
         self.stop_settle_timeout()
         restart_states = [ProfileState.UNKNOWN, ProfileState.IDLE,
                           ProfileState.CHANGED]
         if self.state not in restart_states:
-            logging.debug("%s: not idle: ignoring"
-                          % (self,))
+            logger.debug("%s: not idle: ignoring", self)
             return
         self.state = ProfileState.CHANGED
         cb = self._settle_time_elapsed
@@ -608,7 +610,7 @@ class Profile (object):
 
     def stop_settle_timeout(self):
         """Stops the post-change settle timer for a profile."""
-        logging.debug("%s: stopping settle timer" % (self,))
+        logger.debug("%s: stopping settle timer", self)
         if self._settle_timeout:
             GLib.source_remove(self._settle_timeout)
         self._settle_timeout = None
@@ -618,7 +620,7 @@ class Profile (object):
 
     def _settle_time_elapsed(self):
         """Timeout callback: sync a single profile."""
-        logging.debug("%s: settle timer finished" % (self,))
+        logger.debug("%s: settle timer finished", self)
         assert self.state == ProfileState.CHANGED
         # Slight duplication (command spawning does this too), but need to
         # avoid update tennis when there are overlaps.
@@ -630,11 +632,10 @@ class Profile (object):
             if profile is self:
                 continue
             if self.overlaps(profile):
-                logging.debug("%s (%s) overlaps %s (%s)"
-                              % (self, self.state, profile, profile.state))
+                logger.debug("%s (%r) overlaps %s (%r)", self, self.state,
+                             profile, profile.state)
                 if profile.state in defer_after_states:
-                    logging.info("%s: deferring till after %s"
-                                 % (self, profile))
+                    logger.debug("%s: deferring till after %s", self, profile)
                     self.state = ProfileState.DUE
                     return
         # This profile is the first, or has unique monitored paths, so
@@ -661,11 +662,11 @@ class Profile (object):
 
     def spawn_manual_sync(self):
         """Spawns a manual synchronization (launches the GUI)"""
-        logging.info("%s: manual sync requested" % (self,))
+        logger.info("%s: manual sync requested", self)
         nogo = [ProfileState.SYNCING, ProfileState.MANUAL]
         if self.state in nogo:
-            logging.warning("%s: already syncing: manual sync not possible"
-                            % (self,))
+            logger.warning("%s: already syncing: manual sync not possible",
+                           self)
             return
         self.state = ProfileState.MANUAL
         cmd = UNISON_MANUAL_CMD + [self.name]
@@ -688,11 +689,11 @@ class Profile (object):
     def _command_finished_cb(self, success, *_ignored):
         """Per-profile command finished callback."""
         if self.remove_on_exit:
-            logging.info("%s: removing at command exit" % (self,))
+            logger.info("%s: removing at command exit", self)
             self._app.profiles.remove(self)
             self.state = ProfileState.UNKNOWN
         elif self.pause_on_exit:
-            logging.info("%s: pausing at command exit" % (self,))
+            logger.info("%s: pausing at command exit", self)
             self.state = ProfileState.PAUSED
         elif not success:
             # Failure will already have been logged fully
@@ -705,8 +706,8 @@ class Profile (object):
             if profile is self:
                 continue
             if profile.state == ProfileState.DUE:
-                logging.info("%s: was deferred: now running (after %s)"
-                             % (profile, self))
+                logger.info("%s: was deferred: now running (after %s)",
+                            profile, self)
                 profile._spawn_batch_sync()
                 break
 
@@ -747,7 +748,7 @@ class App (object):
     def _handle_exception(self, exctyp, value, tb):
         traceback.print_exception(exctyp, value, tb, None, sys.stderr)
         if exctyp == KeyboardInterrupt:
-            logging.info("Interrupted - exiting main loop")
+            logger.info("Interrupted - exiting main loop")
             Gtk.main_quit()
 
 
@@ -849,7 +850,7 @@ class App (object):
 
     def _network_changed(self, net_monitor, available):
         if self._net_available and (not available):
-            logging.info("Network no longer available")
+            logger.info("Network no longer available")
             nostop_states = [ProfileState.SYNCING, ProfileState.MANUAL]
             for profile in self.profiles:
                 if profile.state not in nostop_states:
@@ -858,7 +859,7 @@ class App (object):
                     profile.stop_monitoring()
             self._net_available = False
         elif (not self._net_available) and available:
-            logging.info("Network now available")
+            logger.info("Network now available")
             # Start idle and offline profiles, and try to clear errors
             start_states = [ProfileState.UNKNOWN, ProfileState.IDLE,
                             ProfileState.OFFLINE, ProfileState.ERROR]
@@ -871,13 +872,13 @@ class App (object):
 
     def configure(self):
         """Stop all synchronising, and run the configuration GUI."""
-        logging.info("launching configuration GUI")
+        logger.info("launching configuration GUI")
         self._spawn_override_command(UNISON_MANUAL_CMD)
 
 
     def reload_config(self):
         """Reloads Unison's config, updating the list of profiles."""
-        logging.info("(re)loading Unison profiles")
+        logger.info("(re)loading Unison profiles")
         old_profiles = self.profiles
         self.profiles = Profile.load_profiles(self)
         # Keep unique old profiles that are still synchronizing or in manual
@@ -888,8 +889,8 @@ class App (object):
                          ProfileState.MANUAL]
         for profile in old_profiles:
             if profile.state in active_states:
-                logging.info("%s: profile still active: marking for removal"
-                             % (profile,))
+                logger.info("%s: profile still active: marking for removal",
+                            profile)
                 profile.remove_on_exit = True
                 self.profiles.add(profile)
         starting_states = [ProfileState.UNKNOWN]
@@ -974,7 +975,7 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
         """
         cmd = [word.encode("utf-8") for word in cmd]
         cmdline = " ".join(cmd)
-        logging.info("spawning command `%s`" % (cmdline,))
+        logger.info("Spawning command %r", cmdline)
         flags = GLib.SpawnFlags.SEARCH_PATH|GLib.SpawnFlags.DO_NOT_REAP_CHILD
         cwd = os.path.abspath(os.getcwd())
         pid = None
@@ -983,13 +984,14 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
             spawn_rv = GLib.spawn_async(argv=cmd, envp=envp, flags=flags)
             pid, stdin, stdout, stderr = spawn_rv
         except GLib.GError, err:
-            logging.error(repr(err))
+            logger.exception("Failed to spawn command")
+            pid = None
         if pid is not None:
             GLib.child_watch_add(pid, self._command_finished_cb,
                                  [finish_cb, finish_data])
-            logging.debug("spawned pid=%s" % (pid, ))
+            logger.debug("Spawned pid=%d", pid)
         else:
-            logging.error("failed to launch `%s`" % (cmdline,))
+            logger.error("Failed to launch %r", cmdline)
         return pid
 
 
@@ -998,10 +1000,10 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
         GLib.spawn_close_pid(pid)
         finish_cb, finish_data = data
         if condition != 0:
-            logging.error("pid=%d failed: rc=%s" % (pid, condition))
+            logger.error("pid=%d failed: rc=%r", pid, condition)
             finish_cb(False, finish_data)
         else:
-            logging.info("pid=%d successful" % (pid, ))
+            logger.info("pid=%d successful", pid)
             finish_cb(True, finish_data)
 
 
