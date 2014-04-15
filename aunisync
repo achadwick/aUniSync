@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- encoding: utf-8 -*-
 # Automated Unison Profile Synchronizer
-# Copyright (C) 2013  Andrew Chadwick <a.t.chadwick@gmail.com>
+# Copyright (C) 2014  Andrew Chadwick <a.t.chadwick@gmail.com>
 # 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -41,12 +41,11 @@ from gi.repository import Gio
 
 ## Constants
 
-
 #: Program name for the about box.
 PROGRAM_NAME = 'aUniSync'
 
 #: Program version for the about box.
-PROGRAM_VERSION = '0.0.1'
+PROGRAM_VERSION = '0.1.0'
 
 #: Command to use for batch-mode synchronization (suffixed with profile name)
 UNISON_BATCH_CMD = ['unison', '-batch', '-silent', '-retry', '2']
@@ -863,7 +862,7 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
         dia.set_license(license_txt)
         dia.set_wrap_license(False)
         dia.set_version(PROGRAM_VERSION)
-        dia.set_copyright(_("Copyright © 2013 Andrew Chadwick "
+        dia.set_copyright(_("Copyright © 2014 Andrew Chadwick "
                             "<a.t.chadwick@gmail.com>"))
         dia.set_comments(_("Automatically synchronizes files and folders in\n"
                            "your Unison profiles after you modify them."))
