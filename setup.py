@@ -1,6 +1,12 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from distutils.core import setup
+
+import sys
+if sys.version_info < (3,):
+    print("This program requires Python 3.x")
+    print("Please re-run using 'python3 setup.py [...]'")
+    sys.exit(1)
 
 setup(
     name="aunisync",

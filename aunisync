@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 # -*- encoding: utf-8 -*-
 # Automated Unison Profile Synchronizer
 # Copyright (C) 2013  Andrew Chadwick <a.t.chadwick@gmail.com>
@@ -26,6 +26,7 @@ from random import random
 import weakref
 import logging
 import traceback
+from functools import reduce
 logger = logging.getLogger(__name__)
 
 from gettext import gettext as _
@@ -139,16 +140,16 @@ class StatusIcon (Gtk.StatusIcon):
             item.connect('activate', lambda *a: self._app.quit())
             self._menu.append(item)
         if self._app.profiles != set(self._profile_items.keys()):
-            for profile, item in self._profile_items.iteritems():
+            for profile, item in self._profile_items.items():
                 self._menu.remove(item)
             self._profile_items = {}
             for profile in self._app.profiles:
-                item = Gtk.ImageMenuItem(unicode(profile))
+                item = Gtk.ImageMenuItem(str(profile))
                 item.connect('activate', self._profile_menu_item_activate_cb,
                              profile)
                 self._menu.insert(item, 0)
                 self._profile_items[profile] = item
-        for profile, item in self._profile_items.iteritems():
+        for profile, item in self._profile_items.items():
             state = profile.state
             icon_name = self.ICON_NAME[state]
             image = Gtk.Image()
@@ -381,7 +382,7 @@ class Profile (object):
         filename = normalize_path(filename)
         name = os.path.basename(filename[:-len(self.PROFILE_SUFFIX)])
         self._name = name   #: Canonical name of the profile
-        self._label = unicode(self._name)   #: Human-readable label
+        self._label = str(self._name)   #: Human-readable label
         self._roots = set()  #: Local roots
         self._paths = set()   #: Paths within roots, for monitoring
         self._mountpoints = set()  #: Check-mounted points
@@ -452,7 +453,7 @@ class Profile (object):
             elif key == "mountpoint":
                 self._mountpoints.add(value)
             elif key == "label":
-                self._label = unicode(value)
+                self._label = str(value)
 
 
     ## Public read-only properties
@@ -484,16 +485,9 @@ class Profile (object):
     def __repr__(self):
         return "<Profile %r>" % (self.name,)
 
-    def __unicode__(self):
-        """Display name for the profile."""
-        result = unicode(self._label)
-        if self.remove_on_exit:
-            result = u"%s (obsolete)" % (result,)
-        return result
-
     def __str__(self):
-        """ASCII-safe display name for the profile."""
-        result = repr(self._label)
+        """Display name for the profile"""
+        result = str(self._label)
         if self.remove_on_exit:
             result = "%s (obsolete)" % (result,)
         return result
@@ -914,9 +908,7 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
         is called as ``finish_cb(SUCCESS, finish_data)`` where SUCCESS is a
         boolean value indicating success or failure of the command line.
         """
-        cmd = [word.encode("utf-8") for word in cmd]
-        cmdline = " ".join(cmd)
-        logger.info("Spawning command %r", cmdline)
+        logger.info("Spawning command %r", cmd)
         flags = GLib.SpawnFlags.SEARCH_PATH|GLib.SpawnFlags.DO_NOT_REAP_CHILD
         cwd = os.path.abspath(os.getcwd())
         pid = None
@@ -932,7 +924,7 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
                                  [finish_cb, finish_data])
             logger.debug("Spawned pid=%d", pid)
         else:
-            logger.error("Failed to launch %r", cmdline)
+            logger.error("Failed to launch %r", cmd)
         return pid
 
     def _command_finished_cb(self, pid, condition, data):
@@ -949,5 +941,7 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
+    if sys.version_info.major < 3:
+        logger.warning("Python versions earlier than 3.0 are not supported")
     app = App()
     app.run()

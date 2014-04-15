@@ -60,13 +60,13 @@ Make sure you gave the Unison GUI, `unison-gtk` installed.
 
 To install aUniSync and its icons, run the standard `setup.py` script in the usual way. Don't forget to specify your preferred prefix:
 
-        $ python setup.py --help-commands
-        $ python setup.py install --help
-        $ python setup.py install --prefix=/usr/local
+        $ python3 setup.py --help-commands
+        $ python3 setup.py install --help
+        $ python3 setup.py install --prefix=/usr/local
 
-If you want to just install it for personal use, you can use the [user scheme](http://docs.python.org/2/install/#alternate-installation) for `setup.py`:
+If you want to just install it for personal use, you can use the [user scheme](http://docs.python.org/3/install/#alternate-installation) for `setup.py`:
 
-        $ python setup.py install --user
+        $ python3 setup.py install --user
 
 but you should make sure that the `~/.local/bin` folder is in your `$PATH`.
 
