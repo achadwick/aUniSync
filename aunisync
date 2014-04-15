@@ -262,7 +262,7 @@ class RecursiveDirMonitor (object):
         try:
             flags = self._MONITOR_FLAGS
             mon = Gio.File.monitor_directory(directory, flags, None)
-        except GLib.GError, err:
+        except GLib.GError as err:
             logger.exception("Failed to monitor %r", uri)
             mon = None
         if not mon:
@@ -275,7 +275,7 @@ class RecursiveDirMonitor (object):
                               Gio.FILE_ATTRIBUTE_STANDARD_TYPE])
             flags = self._QUERY_FLAGS
             children = directory.enumerate_children(attrs, flags, None)
-        except GLib.GError, err:
+        except GLib.GError as err:
             logger.exception("Failed to add child monitors for %r", uri)
             return False
         mon.__parent = parent
@@ -983,7 +983,7 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
             envp = ["%s=%s" % (k, os.environ[k]) for k in os.environ]
             spawn_rv = GLib.spawn_async(argv=cmd, envp=envp, flags=flags)
             pid, stdin, stdout, stderr = spawn_rv
-        except GLib.GError, err:
+        except GLib.GError as err:
             logger.exception("Failed to spawn command")
             pid = None
         if pid is not None:
