@@ -49,7 +49,7 @@ PROGRAM_NAME = 'aUniSync'
 PROGRAM_VERSION = '0.2.0'
 
 #: Command to use for batch-mode synchronization (suffixed with profile name)
-UNISON_BATCH_CMD = ['unison', '-batch', '-silent', '-retry', '2']
+UNISON_BATCH_CMD = ['unison', '-batch', '-silent', '-retry', '5']
 
 #: Command to use for manual intervention mode (suffixed with profile name for
 #: individual profiles, or not for the general configuration command.
