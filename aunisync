@@ -647,13 +647,14 @@ class Profile (object):
         """Run a per-profile command."""
         self.stop_settle_timeout()
         self.stop_monitoring()
-        def _idle_cb():
-            if self._app.spawn_command(cmd, self._command_finished_cb):
-                self.state = runstate
-            else:
-                self.state = ProfileState.ERROR
-            return False
-        GObject.idle_add(_idle_cb)
+        GObject.idle_add(self._spawn_command_idle_cb, cmd, runstate)
+
+    def _spawn_command_idle_cb(self, cmd, runstate):
+        if self._app.spawn_command(cmd, self._command_finished_cb):
+            self.state = runstate
+        else:
+            self.state = ProfileState.ERROR
+        return False
 
     def _command_finished_cb(self, success, *_ignored):
         """Per-profile command finished callback."""
@@ -918,7 +919,7 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
 
     ## Override commands
 
-    def _spawn_override_command(self, cmd, override_state=ProfileState.MANUAL):
+    def _spawn_override_command(self, cmd, state=ProfileState.MANUAL):
         """Spawns an override command.
 
         Running an override command pauses any idle, unknown, or changed
@@ -927,13 +928,15 @@ this program.  If not, see <http://www.gnu.org/licenses/>.
         entirety of Unison's configuration.
         """
         self._pause_all()
-        def _idle_cb():
-            if self.spawn_command(cmd, self._override_command_finished_cb):
-                self._override_state = override_state
-                self.state_changed()
-            else:
-                GObject.idle_add(self._unpause_all)
-        GObject.idle_add(_idle_cb)
+        GObject.idle_add(self._override_command_idle_cb, cmd, state=state)
+
+    def _override_command_idle_cb(self, cmd, state=ProfileState.MANUAL):
+        """Internal idle callback: run the override command"""
+        if self.spawn_command(cmd, self._override_command_finished_cb):
+            self._override_state = state
+            self.state_changed()
+        else:
+            GObject.idle_add(self._unpause_all)
 
     def _override_command_finished_cb(self, success, data):
         """Override command finished callback."""
