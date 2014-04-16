@@ -46,7 +46,7 @@ from gi.repository import Notify
 PROGRAM_NAME = 'aUniSync'
 
 #: Program version for the about box.
-PROGRAM_VERSION = '0.1.0'
+PROGRAM_VERSION = '0.2.0'
 
 #: Command to use for batch-mode synchronization (suffixed with profile name)
 UNISON_BATCH_CMD = ['unison', '-batch', '-silent', '-retry', '2']

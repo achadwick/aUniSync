@@ -10,7 +10,7 @@ if sys.version_info < (3,):
 
 setup(
     name="aunisync",
-    version="0.1.0",
+    version="0.2.0",
     scripts=["aunisync"],
     data_files=[
         ("share/applications", [
