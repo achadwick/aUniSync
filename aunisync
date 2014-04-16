@@ -37,6 +37,7 @@ from gi.repository import Gtk
 from gi.repository import GLib
 from gi.repository import GObject
 from gi.repository import Gio
+from gi.repository import Notify
 
 
 ## Constants
@@ -453,6 +454,14 @@ class Profile (object):
                 self._mountpoints.add(value)
             elif key == "label":
                 self._label = str(value)
+        # Error notifications
+        self._notification = Notify.Notification.new("", "", "unison")
+        self._notification_shown = False
+        self._notification.add_action("open-gui", "Open GUI",
+                                      self._notification_action_cb, None)
+        self._notification.add_action("retry", "Retry",
+                                      self._notification_action_cb, None)
+        self._notification.set_timeout(Notify.EXPIRES_NEVER)
 
 
     ## Public read-only properties
@@ -522,6 +531,7 @@ class Profile (object):
         self._state = state
         if state != oldstate:
             self._app.state_changed()
+            self._update_notification()
 
 
     ## Filesystem monitoring
@@ -614,7 +624,10 @@ class Profile (object):
 
     def _spawn_batch_sync(self):
         """Spawns a batch-mode sync."""
-        if self.state != ProfileState.DUE:
+        nogo = [ProfileState.SYNCING, ProfileState.MANUAL]
+        if self.state in nogo:
+            logger.warning("%s: already syncing: batch sync not possible",
+                           self)
             return
         cmd = UNISON_BATCH_CMD + [self.name]
         self.spawn_command(cmd, ProfileState.SYNCING)
@@ -627,7 +640,6 @@ class Profile (object):
             logger.warning("%s: already syncing: manual sync not possible",
                            self)
             return
-        self.state = ProfileState.MANUAL
         cmd = UNISON_MANUAL_CMD + [self.name]
         self.spawn_command(cmd, ProfileState.MANUAL)
 
@@ -669,6 +681,38 @@ class Profile (object):
                 break
 
 
+    ## Error notifications
+
+
+    def _update_notification(self):
+        """Updates the status notification for this Profile
+
+        This only shows when in the ERROR state currently.
+        """
+        icon = StatusIcon.ICON_NAME[self._state]
+        summary = _("Synchronization Error")
+        body = (_("Unison profile \u201C%s\u201D failed to synchronize.") %
+                (self._label,))
+        self._notification.update(summary, body, icon)
+        try:
+            if self._state >= ProfileState.ERROR:
+                self._notification.show()
+                self._notification_shown = True
+            elif self._notification_shown:
+                self._notification.close()
+                self._notification_shown = False
+        except GLib.GError as err:
+            logger.exception("Notification update failed for %r", self)
+            # Typically random DBus failures
+
+    def _notification_action_cb(self, notification, action, data):
+        """Handles notification popup action buttons"""
+        if action == "open-gui":
+            self.spawn_manual_sync()
+        elif action == "retry":
+            self._spawn_batch_sync()
+
+
 class App (object):
     """Main application instance."""
 
@@ -696,6 +740,7 @@ class App (object):
         available = self._net_monitor.get_property("network-available")
         self._network_changed(self._net_monitor, available)
         self.restart_remote_checking()
+        Notify.init(PROGRAM_NAME)
         Gtk.main()
 
     def _handle_exception(self, exctyp, value, tb):
