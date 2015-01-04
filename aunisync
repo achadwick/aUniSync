@@ -109,6 +109,8 @@ class StatusIcon (Gtk.StatusIcon):
                     ProfileState.OFFLINE: _("Offline"),
                     ProfileState.PAUSED: _("Paused"),
                     ProfileState.ERROR: _('Errors Encountered'), }
+    ICON_SIZES = [16, 22, 24, 32, 48, 64]
+
 
     def __init__(self, app):
         """Initialise, connected to the main app."""
@@ -176,11 +178,9 @@ class StatusIcon (Gtk.StatusIcon):
         screen = self.get_screen()
         if icon_name.endswith("-symbolic") and self._size and screen:
             # Not too happy with this size-setting fudge.
-            # Looks OK in Xfce4 when using a borderless tray and icons from
-            # gnome-icon-theme-symbolic. Really need some custom symbolic
-            # icons for Unison though.
-            size = max(8, self._size)
-            for sanesize in [16, 22, 24, 32, 48, 64]:
+            # Looks OK in Xfce4 when using a borderless tray
+            size = max(min(self.ICON_SIZES), self._size)
+            for sanesize in self.ICON_SIZES:
                 if sanesize > self._size:
                     break
                 size = sanesize
@@ -207,6 +207,9 @@ class StatusIcon (Gtk.StatusIcon):
         self._update_menu()
 
     def _size_changed_cb(self, statusicon, size):
+        screen = self.get_screen()
+        if not screen:
+            return
         self._size = size
         self.update_icon()
 
