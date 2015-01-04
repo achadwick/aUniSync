@@ -126,6 +126,7 @@ class StatusIcon (Gtk.StatusIcon):
         self._update_menu()
         self._size = None
         self.connect("size-changed", self._size_changed_cb)
+        self.connect("activate", self._activate_cb)
 
     def _update_menu(self):
         """Updates the menu. Called when profile states change."""
@@ -220,6 +221,12 @@ class StatusIcon (Gtk.StatusIcon):
         self._menu.popup(parent_menu_shell=None, parent_menu_item=None,
                          func=Gtk.StatusIcon.position_menu, data=self,
                          button=button, activate_time=activate_time)
+
+    def _activate_cb(self, status_icon):
+        self._menu.show_all()
+        self._menu.popup(parent_menu_shell=None, parent_menu_item=None,
+                         func=Gtk.StatusIcon.position_menu, data=self,
+                         button=0, activate_time=Gdk.CURRENT_TIME)
 
 
 class RecursiveDirMonitor (object):
