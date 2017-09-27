@@ -728,43 +728,76 @@ class Profile (object):
             self._spawn_batch_sync()
 
 
-class App (object):
+class App (Gtk.Application):
     """Main application instance."""
 
     REMOTE_CHECK_INTERVAL = 300
+    IDENTIFIER = "org.piffle.aunisync"
 
     ## Initialization and startup
 
     def __init__(self):
         """Initialize, in an unconfigured state."""
-        super(App, self).__init__()
+        super().__init__(
+            application_id=self.IDENTIFIER,
+        )
+        self._orig_excepthook = None
         self.profiles = set()
-        self._status_icon = StatusIcon(self)
+        self._status_icon = None
         self._override_state = None
-        self._net_monitor = Gio.NetworkMonitor.get_default()
-        self._net_monitor.connect("network-changed", self._network_changed)
+        self._net_monitor = None
         self._net_available = False
         self._remote_check_timeout_id = None
+        self.connect("startup", self._startup_cb)
+        self.connect("activate", self._activate_cb)
 
-    def run(self):
-        """Load config and start the GTK main loop."""
-        self.reload_config()
+    def run(self, *args, **kwargs):
+        """Enter the application (all instances)
+
+        This override reestablishes normal Ctrl-C behaviour, i.e.
+        unceremoniously killing the process.
+        """
         signal.signal(signal.SIGINT, signal.SIG_DFL)
-        self._orig_excepthook = sys.excepthook
-        sys.excepthook = self._handle_exception
+        return super().run(*args, **kwargs)
+
+    def _startup_cb(self, app):
+        """Application startup (primary instance only)"""
+        # Init objects to be used in the primary instance
+        self._status_icon = StatusIcon(self)
+        self._net_monitor = Gio.NetworkMonitor.get_default()
+        self._net_monitor.connect("network-changed", self._network_changed)
+        # Load config
+        self.reload_config()
         self._net_available = False
+
+    def _activate_cb(self, app):
         available = self._net_monitor.get_property("network-available")
         self._network_changed(self._net_monitor, available)
         self.restart_remote_checking()
         Notify.init(PROGRAM_NAME)
-        Gtk.main()
+        self.hold()
+        logger.info("Activated")
+        # While in the GTK main loop, handle exceptions ourself
+        if not self._orig_excepthook:
+            self._orig_excepthook = sys.excepthook
+            sys.excepthook = self._handle_exception
 
     def _handle_exception(self, exctyp, value, tb):
-        traceback.print_exception(exctyp, value, tb, None, sys.stderr)
-        if exctyp == KeyboardInterrupt:
-            logger.info("Interrupted - exiting main loop")
+        """Handles exceptions by ending the process without shutdown"""
+        logger.critical("Caught exception: logging traceback...")
+        blocks = traceback.format_exception(exctyp, value, tb, limit=None)
+        for block in blocks:
+            block = block.rstrip("\n")
+            for line in block.split("\n"):
+                logger.error(line)
+        # Terminate any GTK main loops
+        logger.debug("Terminating GTK main loop(s)")
+        while Gtk.main_level():
             Gtk.main_quit()
-
+        # Invoke the original exception hook, whatever it was
+        logger.debug("Invoking original signal handler")
+        self._orig_excepthook(exctyp, value, tb)
+        sys.exit("Exception caught, bailing out!")
 
     ## Overall state (summarises all the profiles' states)
 
@@ -897,10 +930,6 @@ class App (object):
         starting_states = [ProfileState.UNKNOWN]
         self._queue_profiles_in_states(starting_states)
         self.state_changed()
-
-    def quit(self):
-        """Exit GTK's main loop."""
-        Gtk.main_quit()
 
     def about(self):
         """Show the about dialog"""
