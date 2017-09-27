@@ -758,6 +758,7 @@ class App (Gtk.Application):
         unceremoniously killing the process.
         """
         signal.signal(signal.SIGINT, signal.SIG_DFL)
+        os.chdir(GLib.get_home_dir())
         return super().run(*args, **kwargs)
 
     def _startup_cb(self, app):
